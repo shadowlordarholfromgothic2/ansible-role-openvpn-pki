@@ -67,6 +67,19 @@ argument_specs:
         choices: [udp, tcp, udp6, tcp6]
         default: udp
         description: Protocol of the server. Must match the server's C(openvpn_proto).
+      openvpn_pki_auth:
+        type: str
+        default: SHA256
+        description:
+          - HMAC digest written into the profiles as C(auth). Must match the server's.
+          - An empty string leaves it out of the profiles.
+      openvpn_pki_key_direction:
+        type: raw
+        default: 1
+        description:
+          - C(key-direction) written into the profiles, V(0) or V(1). The
+            server is V(0), so the clients are V(1).
+          - An empty string leaves it out of the profiles.
       openvpn_pki_clients:
         type: list
         elements: dict

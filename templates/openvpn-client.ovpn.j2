@@ -12,6 +12,12 @@ persist-tun
 # Only accept the server's certificate - not another client's.
 remote-cert-tls server
 verify-x509-name {{ openvpn_pki_server_name }} name
+{% if (openvpn_pki_auth | string) not in ['', 'None'] %}
+auth {{ openvpn_pki_auth }}
+{% endif %}
+{% if (openvpn_pki_key_direction | string) not in ['', 'None'] %}
+key-direction {{ openvpn_pki_key_direction }}
+{% endif %}
 verb 3
 
 <ca>
