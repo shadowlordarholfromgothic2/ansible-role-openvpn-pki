@@ -1,0 +1,28 @@
+---
+# Compared with the decrypted content of the existing profile, so a
+# Vault-encrypted one that is still up to date is left as it is. One that has
+# to change (new remote, port, certificate, ...) is written in plain text again.
+- name: Write the client profiles
+  ansible.builtin.copy:
+    content: "{{ _openvpn_pki_profile }}"
+    dest: "{{ _openvpn_pki_profile_path }}"
+    mode: "0600"
+  loop: "{{ _openvpn_pki_active }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (_openvpn_pki_profile | trim) != (_openvpn_pki_profile_current | trim)
+  diff: false
+  vars:
+    _openvpn_pki_profile_path: "{{ openvpn_pki_dir }}/clients/{{ item.name }}.ovpn"
+    _openvpn_pki_profile: "{{ lookup('ansible.builtin.template', openvpn_pki_client_template) }}"
+    _openvpn_pki_profile_current: >-
+      {{ lookup('ansible.builtin.file', _openvpn_pki_profile_path)
+         if _openvpn_pki_profile_path is file else '' }}
+
+- name: Remove the profiles of revoked clients
+  ansible.builtin.file:
+    path: "{{ openvpn_pki_dir }}/clients/{{ item.name }}.ovpn"
+    state: absent
+  loop: "{{ _openvpn_pki_revoked }}"
+  loop_control:
+    label: "{{ item.name }}"

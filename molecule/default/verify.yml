@@ -1,22 +1,311 @@
 ---
-# Check the host's end state, not the role's output: what would a user log in
-# and look at to tell that the role worked?
+# Check the end state, not the role's output: the files on the controller, and
+# whether OpenVPN accepts them - a server started from the PKI lets alice and
+# carol in with their profiles and turns bob, revoked in converge.yml, away.
 - name: Verify
   hosts: all
   become: true
   gather_facts: false
 
-  tasks:
-    - name: Read the rendered configuration file
-      ansible.builtin.slurp:
-        src: /etc/template_role/config.ini
-      register: config
+  vars:
+    molecule_ephemeral_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    molecule_pki_dir: "{{ molecule_ephemeral_dir }}/pki"
+    molecule_vpn_dir: /tmp/molecule-vpn
+    molecule_date_format: "%Y%m%d%H%M%SZ"
 
-    - name: Assert the settings were rendered
-      ansible.builtin.assert:
-        that:
-          - "'log_level = info' in content"
-          - "'listen = 127.0.0.1:8080' in content"
-        quiet: true
-      vars:
-        content: "{{ config.content | b64decode }}"
+    # Every file the role should leave, with its mode - or `absent`.
+    molecule_files:
+      private: "0700"
+      clients: "0700"
+      issued: "0755"
+      ca.crt: "0644"
+      crl.pem: "0644"
+      issued/server.crt: "0644"
+      issued/alice.crt: "0644"
+      issued/bob.crt: "0644"      # kept: the CRL is built from it
+      issued/carol.crt: "0644"
+      private/ca.key: "0600"
+      private/server.key: "0600"
+      private/tls-crypt.key: "0600"
+      private/alice.key: "0600"
+      private/bob.key: "0600"
+      private/carol.key: "0600"
+      clients/alice.ovpn: "0600"
+      clients/carol.ovpn: "0600"
+      clients/bob.ovpn: absent
+
+    # The secrets, and whether they should still be Vault-encrypted. The role
+    # writes in plain text only what is new or changed: carol's files.
+    molecule_secrets:
+      private/ca.key: true
+      private/server.key: true
+      private/tls-crypt.key: true
+      private/alice.key: true
+      private/bob.key: true
+      clients/alice.ovpn: true
+      private/carol.key: false
+      clients/carol.ovpn: false
+
+  tasks:
+    # ---------- the files on the controller -----------------------------------
+
+    - name: Check the files on the controller
+      delegate_to: localhost
+      run_once: true
+      become: false
+      block:
+        - name: Read the state of the files
+          ansible.builtin.stat:
+            path: "{{ molecule_pki_dir }}/{{ item.key }}"
+          loop: "{{ molecule_files | dict2items }}"
+          loop_control:
+            label: "{{ item.key }}"
+          register: molecule_stat
+
+        - name: Assert that the files are there, with their modes
+          ansible.builtin.assert:
+            that: >-
+              (not item.stat.exists) if item.item.value == 'absent'
+              else (item.stat.exists and item.stat.mode == item.item.value)
+            fail_msg: >-
+              {{ item.item.key }}: expected {{ item.item.value }}, found
+              {{ item.stat.mode | default('nothing') }}.
+            quiet: true
+          loop: "{{ molecule_stat.results }}"
+          loop_control:
+            label: "{{ item.item.key }}"
+
+        # slurp reads the files as they are on disk, the file lookup would
+        # decrypt them.
+        - name: Read the secrets as they are on disk
+          ansible.builtin.slurp:
+            src: "{{ molecule_pki_dir }}/{{ item.key }}"
+          loop: "{{ molecule_secrets | dict2items }}"
+          loop_control:
+            label: "{{ item.key }}"
+          register: molecule_raw
+
+        # A key the role had replaced, or a profile it had rewritten, would be
+        # in plain text now.
+        - name: Assert that the role left the encrypted secrets alone
+          ansible.builtin.assert:
+            that: (item.content | b64decode).startswith('$ANSIBLE_VAULT;') == item.item.value
+            fail_msg: >-
+              {{ item.item.key }} should {{ '' if item.item.value else 'not ' }}be
+              Vault-encrypted.
+            quiet: true
+          loop: "{{ molecule_raw.results }}"
+          loop_control:
+            label: "{{ item.item.key }}"
+
+        - name: Read the certificates
+          community.crypto.x509_certificate_info:
+            path: "{{ molecule_pki_dir }}/{{ item }}"
+          loop: [ca.crt, issued/server.crt, issued/alice.crt, issued/bob.crt, issued/carol.crt]
+          register: molecule_certs
+
+        - name: Assert that the CA certificate is a CA
+          ansible.builtin.assert:
+            that:
+              - _ca.subject.commonName == 'Molecule CA'
+              - _ca.issuer.commonName == 'Molecule CA'
+              - _ca.basic_constraints == ['CA:TRUE']
+              - _ca.basic_constraints_critical
+              - _ca.key_usage | sort == ['Certificate Sign', 'CRL Sign']
+              - _ca.key_usage_critical
+              - _ca.public_key_type == 'ECC'
+              - _days == 3650
+            quiet: true
+          vars:
+            _ca: "{{ molecule_certs.results[0] }}"
+            _days: >-
+              {{ ((_ca.not_after | to_datetime(molecule_date_format))
+                  - (_ca.not_before | to_datetime(molecule_date_format))).days }}
+
+        # OpenVPN checks these: `remote-cert-tls server` in the profiles,
+        # `remote-cert-tls client` on the server.
+        - name: Assert that the CA issued the server and client certificates
+          ansible.builtin.assert:
+            that:
+              - item.subject.commonName == item.item | basename | splitext | first
+              - item.issuer.commonName == 'Molecule CA'
+              - item.basic_constraints is none
+              - item.key_usage == ['Digital Signature']
+              - item.key_usage_critical
+              - item.extended_key_usage == [_usage]
+              - item.public_key_type == 'ECC'
+              - _days == 1825
+            quiet: true
+          loop: "{{ molecule_certs.results[1:] }}"
+          loop_control:
+            label: "{{ item.item }}"
+          vars:
+            _usage: "{{ 'TLS Web Server Authentication' if item.item == 'issued/server.crt' else 'TLS Web Client Authentication' }}"
+            _days: >-
+              {{ ((item.not_after | to_datetime(molecule_date_format))
+                  - (item.not_before | to_datetime(molecule_date_format))).days }}
+
+        - name: Read the certificate revocation list
+          community.crypto.x509_crl_info:
+            path: "{{ molecule_pki_dir }}/crl.pem"
+          register: molecule_crl
+
+        - name: Assert that the CRL revokes bob and nobody else
+          ansible.builtin.assert:
+            that:
+              - molecule_crl.issuer.commonName == 'Molecule CA'
+              - molecule_crl.revoked_certificates | map(attribute='serial_number') | list == [_bob.serial_number]
+            quiet: true
+          vars:
+            _bob: "{{ molecule_certs.results | selectattr('item', 'eq', 'issued/bob.crt') | first }}"
+
+        # The file lookup decrypts alice's profile.
+        - name: Assert that the profiles carry the settings and the PKI
+          ansible.builtin.assert:
+            that:
+              - "'proto udp' in _lines"
+              - "'remote 127.0.0.1 1194' in _lines"
+              - "'verify-x509-name server name' in _lines"
+              - lookup('ansible.builtin.file', molecule_pki_dir ~ '/ca.crt') in _profile
+              - lookup('ansible.builtin.file', molecule_pki_dir ~ '/issued/' ~ item ~ '.crt') in _profile
+              - lookup('ansible.builtin.file', molecule_pki_dir ~ '/private/' ~ item ~ '.key') in _profile
+              - lookup('ansible.builtin.file', molecule_pki_dir ~ '/private/tls-crypt.key') in _profile
+            quiet: true
+          loop: [alice, carol]
+          vars:
+            _profile: "{{ lookup('ansible.builtin.file', molecule_pki_dir ~ '/clients/' ~ item ~ '.ovpn') }}"
+            _lines: "{{ _profile.splitlines() }}"
+
+    # ---------- OpenVPN accepts it --------------------------------------------
+    # The clients share the server's network namespace, so they leave
+    # addresses and routes alone (*-noexec): what is tested is the control
+    # channel - tls-crypt, certificates, CRL and verify-x509-name.
+
+    - name: Connect the clients to a server started from the PKI
+      block:
+        - name: Create the working directory
+          ansible.builtin.file:
+            path: "{{ molecule_vpn_dir }}"
+            state: directory
+            mode: "0700"
+
+        # copy decrypts Vault-encrypted files on the way.
+        - name: Copy the server's files
+          ansible.builtin.copy:
+            src: "{{ molecule_pki_dir }}/{{ item }}"
+            dest: "{{ molecule_vpn_dir }}/{{ item | basename }}"
+            mode: "0600"
+          loop: [ca.crt, crl.pem, issued/server.crt, private/server.key, private/tls-crypt.key]
+
+        - name: Copy the client profiles
+          ansible.builtin.copy:
+            src: "{{ item.src }}"
+            dest: "{{ molecule_vpn_dir }}/{{ item.name }}.ovpn"
+            mode: "0600"
+          loop:
+            - { name: alice, src: "{{ molecule_pki_dir }}/clients/alice.ovpn" }
+            - { name: carol, src: "{{ molecule_pki_dir }}/clients/carol.ovpn" }
+            # Saved by prepare.yml, before bob was revoked.
+            - { name: bob, src: "{{ molecule_ephemeral_dir }}/bob-revoked.ovpn" }
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Write the server configuration
+          ansible.builtin.copy:
+            content: |
+              port 1194
+              proto udp
+              dev tun
+              topology subnet
+              server 10.8.0.0 255.255.255.0
+              ca {{ molecule_vpn_dir }}/ca.crt
+              cert {{ molecule_vpn_dir }}/server.crt
+              key {{ molecule_vpn_dir }}/server.key
+              tls-crypt {{ molecule_vpn_dir }}/tls-crypt.key
+              crl-verify {{ molecule_vpn_dir }}/crl.pem
+              dh none
+              remote-cert-tls client
+              keepalive 10 120
+              verb 3
+            dest: "{{ molecule_vpn_dir }}/server.conf"
+            mode: "0600"
+
+        - name: Start the server
+          ansible.builtin.command:
+            argv:
+              - openvpn
+              - --daemon
+              - molecule-server
+              - --config
+              - "{{ molecule_vpn_dir }}/server.conf"
+              - --log
+              - "{{ molecule_vpn_dir }}/server.log"
+              - --writepid
+              - "{{ molecule_vpn_dir }}/server.pid"
+          changed_when: true
+
+        - name: Wait for the server to come up
+          ansible.builtin.wait_for:
+            path: "{{ molecule_vpn_dir }}/server.log"
+            search_regex: Initialization Sequence Completed
+            timeout: 30
+
+        - name: Start the clients with their profiles
+          ansible.builtin.command:
+            argv:
+              - openvpn
+              - --daemon
+              - "molecule-{{ item }}"
+              - --config
+              - "{{ molecule_vpn_dir }}/{{ item }}.ovpn"
+              - --ifconfig-noexec
+              - --route-noexec
+              - --log
+              - "{{ molecule_vpn_dir }}/{{ item }}.log"
+              - --writepid
+              - "{{ molecule_vpn_dir }}/{{ item }}.pid"
+          loop: [alice, carol, bob]
+          changed_when: true
+
+        - name: Wait for alice and carol to connect
+          ansible.builtin.wait_for:
+            path: "{{ molecule_vpn_dir }}/{{ item }}.log"
+            search_regex: Initialization Sequence Completed
+            timeout: 60
+          loop: [alice, carol]
+
+        # The server drops the session right after its TLS alert, so the alert
+        # rarely reaches the client - the server's log is the evidence.
+        - name: Wait for the server to turn bob away
+          ansible.builtin.wait_for:
+            path: "{{ molecule_vpn_dir }}/server.log"
+            search_regex: VERIFY ERROR. depth=0, error=certificate revoked. CN=bob\b
+            timeout: 60
+
+        - name: Read the server log
+          ansible.builtin.slurp:
+            src: "{{ molecule_vpn_dir }}/server.log"
+          register: molecule_server_log
+
+        - name: Assert that only alice and carol got a session
+          ansible.builtin.assert:
+            that:
+              - _log is search('\[alice\] Peer Connection Initiated')
+              - _log is search('\[carol\] Peer Connection Initiated')
+              - _log is not search('\[bob\] Peer Connection Initiated')
+            quiet: true
+          vars:
+            _log: "{{ molecule_server_log.content | b64decode }}"
+
+      always:
+        - name: Stop OpenVPN
+          ansible.builtin.shell:
+            cmd: 'kill "$(cat {{ molecule_vpn_dir }}/{{ item }}.pid)"'
+            removes: "{{ molecule_vpn_dir }}/{{ item }}.pid"
+          loop: [alice, carol, bob, server]
+          changed_when: true
+
+        - name: Remove the working directory
+          ansible.builtin.file:
+            path: "{{ molecule_vpn_dir }}"
+            state: absent

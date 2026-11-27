@@ -1,55 +1,54 @@
 ---
-# ==============================================================================
-# 1. FAIL FAST - validate input before touching anything
-# ==============================================================================
+# Everything happens on the controller, once per play: the role can run in a
+# play for localhost or in the play that deploys the VPN server. become is off
+# so that a play with `become: true` does not ask for sudo on the controller.
 
-- name: Validate role input
-  ansible.builtin.assert:
-    that:
-      - template_role_state in ['present', 'absent']
-      - template_role_config_dir is match('^/')
-      - template_role_settings is mapping
-    fail_msg: >-
-      template_role: needs template_role_state present/absent, an absolute
-      template_role_config_dir and a dict in template_role_settings
-      (got state='{{ template_role_state }}',
-      config_dir='{{ template_role_config_dir }}')
-    quiet: true
-  tags: [always]
-
-# ==============================================================================
-# 2. TEARDOWN - a separate path, so the rest of the file only handles 'present'
-# ==============================================================================
-
-- name: Remove the configuration
-  ansible.builtin.file:
-    path: "{{ template_role_config_dir }}"
-    state: absent
-  when: template_role_state == 'absent'
-  tags: [config]
-
-# ==============================================================================
-# 3. CONFIGURE
-# ==============================================================================
-
-- name: Configure template_role
-  when: template_role_state == 'present'
-  tags: [config]
+- name: Create the OpenVPN PKI and the client profiles on the controller
+  delegate_to: localhost
+  run_once: true
+  become: false
   block:
-    - name: Create the configuration directory
-      ansible.builtin.file:
-        path: "{{ template_role_config_dir }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+    # ==========================================================================
+    # 1. FAIL FAST - validate input before touching anything
+    # ==========================================================================
 
-    - name: Render the configuration file
-      ansible.builtin.template:
-        src: config.ini.j2
-        dest: "{{ template_role_config_dir }}/config.ini"
-        owner: root
-        group: root
-        mode: "0644"
-        backup: true
-      notify: template_role config changed
+    - name: Validate the role input
+      ansible.builtin.import_tasks:
+        file: validate.yml
+      tags: [always]
+
+    # ==========================================================================
+    # 2. KEYS - only the missing ones, an existing key is never replaced
+    # ==========================================================================
+
+    - name: Create the PKI directories and the missing keys
+      ansible.builtin.import_tasks:
+        file: keys.yml
+      tags: [openvpn_pki, openvpn_pki_keys]
+
+    # ==========================================================================
+    # 3. CERTIFICATES - the CA, the server, the clients and the CRL
+    # ==========================================================================
+
+    - name: Issue the certificates and the revocation list
+      ansible.builtin.import_tasks:
+        file: certificates.yml
+      tags: [openvpn_pki, openvpn_pki_certs]
+
+    # ==========================================================================
+    # 4. CLIENT PROFILES
+    # ==========================================================================
+
+    - name: Write the client profiles
+      ansible.builtin.import_tasks:
+        file: profiles.yml
+      tags: [openvpn_pki, openvpn_pki_profiles]
+
+    # ==========================================================================
+    # 5. REPORT - what still has to be encrypted
+    # ==========================================================================
+
+    - name: Report the secrets in plain text
+      ansible.builtin.import_tasks:
+        file: report.yml
+      tags: [openvpn_pki, openvpn_pki_report]

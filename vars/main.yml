@@ -1,0 +1,25 @@
+---
+# Internal helpers - not meant to be overridden.
+
+# What a server or client name must look like: it becomes a file name and the
+# certificate's CN.
+_openvpn_pki_name_regex: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+
+# Their keys share private/ with the clients' and the server's.
+_openvpn_pki_reserved_names: [ca, tls-crypt]
+
+# The clients with `revoked` filled in (false), split by it.
+_openvpn_pki_clients: "{{ [{'revoked': false}] | product(openvpn_pki_clients) | map('combine') | list }}"
+_openvpn_pki_active: "{{ _openvpn_pki_clients | rejectattr('revoked') | list }}"
+_openvpn_pki_revoked: "{{ _openvpn_pki_clients | selectattr('revoked') | list }}"
+
+# Every name in the PKI: the server's, then the clients' (revoked or not).
+_openvpn_pki_names: "{{ [openvpn_pki_server_name] + (openvpn_pki_clients | map(attribute='name') | list) }}"
+
+# What the CA issues a certificate to: the server, then every client that is
+# not revoked.
+_openvpn_pki_leaves: "{{ [{'name': openvpn_pki_server_name, 'server': true}] + _openvpn_pki_active }}"
+
+# Decrypted on the fly when the file is Vault-encrypted, like every key the
+# role reads.
+_openvpn_pki_ca_key: "{{ lookup('ansible.builtin.file', openvpn_pki_dir ~ '/private/ca.key') }}"

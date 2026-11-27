@@ -1,0 +1,74 @@
+---
+# The signing requests are only kept in memory. x509_certificate compares them
+# with the certificate on disk and issues a new one only when the subject,
+# extensions, key or issuing CA differ.
+
+- name: Create the CA's signing request
+  community.crypto.openssl_csr_pipe:
+    privatekey_content: "{{ _openvpn_pki_ca_key }}"
+    common_name: "{{ openvpn_pki_ca_name }}"
+    use_common_name_for_san: false
+    basic_constraints: ["CA:TRUE"]
+    basic_constraints_critical: true
+    key_usage: [keyCertSign, cRLSign]
+    key_usage_critical: true
+  register: _openvpn_pki_ca_csr
+  changed_when: false
+
+- name: Self-sign the CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ openvpn_pki_dir }}/ca.crt"
+    csr_content: "{{ _openvpn_pki_ca_csr.csr }}"
+    privatekey_content: "{{ _openvpn_pki_ca_key }}"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ openvpn_pki_ca_days }}d"
+    mode: "0644"
+
+# The server checks for clientAuth (`remote-cert-tls client`), the profiles
+# for serverAuth (`remote-cert-tls server`).
+- name: Create the signing requests of the server and the clients
+  community.crypto.openssl_csr_pipe:
+    privatekey_content: "{{ lookup('ansible.builtin.file', openvpn_pki_dir ~ '/private/' ~ item.name ~ '.key') }}"
+    common_name: "{{ item.name }}"
+    use_common_name_for_san: false
+    key_usage: [digitalSignature]
+    key_usage_critical: true
+    extended_key_usage: ["{{ 'serverAuth' if item.server | default(false) else 'clientAuth' }}"]
+  loop: "{{ _openvpn_pki_leaves }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _openvpn_pki_csrs
+  changed_when: false
+
+- name: Issue the certificates of the server and the clients
+  community.crypto.x509_certificate:
+    path: "{{ openvpn_pki_dir }}/issued/{{ item.item.name }}.crt"
+    csr_content: "{{ item.csr }}"
+    provider: ownca
+    ownca_path: "{{ openvpn_pki_dir }}/ca.crt"
+    ownca_privatekey_content: "{{ _openvpn_pki_ca_key }}"
+    ownca_not_after: "+{{ openvpn_pki_cert_days }}d"
+    mode: "0644"
+  loop: "{{ _openvpn_pki_csrs.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+# OpenVPN turns every client away once the CRL has expired, hence the long
+# next_update. The timestamps are left out of the comparison, so the CRL only
+# changes - and gets new dates - when the revoked list does. A revoked client
+# that never got a certificate has nothing to revoke.
+- name: Create the certificate revocation list
+  community.crypto.x509_crl:
+    path: "{{ openvpn_pki_dir }}/crl.pem"
+    privatekey_content: "{{ _openvpn_pki_ca_key }}"
+    issuer:
+      CN: "{{ openvpn_pki_ca_name }}"
+    last_update: "+0s"
+    next_update: "+{{ openvpn_pki_ca_days }}d"
+    ignore_timestamps: true
+    revoked_certificates: "{{ _openvpn_pki_revoked_certs | select('file') | map('community.general.dict_kv', 'path') | list }}"
+    mode: "0644"
+  vars:
+    _openvpn_pki_revoked_certs: >-
+      {{ [openvpn_pki_dir ~ '/issued/'] | product(_openvpn_pki_revoked | map(attribute='name'), ['.crt'])
+         | map('join') }}

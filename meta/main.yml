@@ -2,20 +2,21 @@
 galaxy_info:
   # Must match the prefix of every variable in defaults/main.yml
   # (ansible-lint: var-naming[no-role-prefix]).
-  role_name: template_role
-  namespace: local
+  role_name: openvpn_pki
+  namespace: homelab
   author: Kirill
   description: >-
-    TODO: one or two sentences on what the role does and what it deliberately
-    leaves to other roles.
+    Creates and maintains the PKI for an OpenVPN server - CA, server and client
+    certificates, tls-crypt key and CRL - and a ready-to-import profile per
+    client, as files on the controller that can be kept Vault-encrypted.
+    Deploying the server is left to the homelab.openvpn role.
   license: MIT
-  min_ansible_version: "2.14"
+  min_ansible_version: "2.15"
+  # The role runs on the controller only and never touches the play's hosts.
   platforms:
-    - name: Debian
-      versions: [bookworm, trixie]
-    - name: Ubuntu
-      versions: [jammy, noble]
-  galaxy_tags: []
+    - name: GenericLinux
+      versions: [all]
+  galaxy_tags: [openvpn, vpn, pki, certificates, security]
 
 # Prefer checking for a prerequisite in tasks/main.yml over pulling in a role
 # that installs it.
