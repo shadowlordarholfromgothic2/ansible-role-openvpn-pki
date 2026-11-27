@@ -82,6 +82,8 @@ See [`defaults/main.yml`](defaults/main.yml) for the full commented list.
 | `openvpn_pki_remote`          | `vpn.example.com`        | Address the clients connect to — **must be set**, the default is refused |
 | `openvpn_pki_port`            | `1194`                   | Must match the server's `openvpn_port` |
 | `openvpn_pki_proto`           | `udp`                    | `udp` / `tcp` / `udp6` / `tcp6`, must match the server's `openvpn_proto` |
+| `openvpn_pki_auth`            | `SHA256`                 | `auth` digest in the profiles, must match the server's; `""` leaves it out |
+| `openvpn_pki_key_direction`   | `1`                      | `key-direction` in the profiles (`0` / `1`); `""` leaves it out |
 | `openvpn_pki_clients`         | `[]`                     | `- name: <name>`, optionally `revoked: true` |
 | `openvpn_pki_client_template` | `openvpn-client.ovpn.j2` | Template of the profiles |
 
@@ -166,7 +168,7 @@ ansible-vault decrypt --output kirgo-laptop.ovpn pki/clients/kirgo-laptop.ovpn
 * **Renew a certificate**: delete it (`ca.crt` or `issued/<name>.crt`) and
   re-run. Its key stays, the affected profiles are rewritten. A new `ca.crt`
   means new certificates for everyone and new profiles for all clients.
-* **Change the remote, port or protocol**: re-run. Every profile is rewritten
+* **Change the remote, port, protocol, auth or key direction**: re-run. Every profile is rewritten
   in plain text and has to be encrypted again.
 
 ### Custom profiles

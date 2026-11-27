@@ -42,6 +42,13 @@ openvpn_pki_port: 1194
 # udp | tcp | udp6 | tcp6
 openvpn_pki_proto: udp
 
+# HMAC digest (`auth`) and `key-direction` written into the profiles. Some
+# clients (e.g. routers) refuse to connect without them. auth must match the
+# server's; the server is direction 0, so the clients are 1. Set either to ""
+# to leave it out of the profiles.
+openvpn_pki_auth: SHA256
+openvpn_pki_key_direction: 1
+
 # One key, certificate and profile per client. `revoked: true` puts the
 # client's certificate on the CRL and deletes its profile - keep the entry
 # afterwards, or the certificate drops off the CRL again.

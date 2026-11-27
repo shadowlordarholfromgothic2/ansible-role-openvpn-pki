@@ -166,6 +166,8 @@
               - "'proto udp' in _lines"
               - "'remote 127.0.0.1 1194' in _lines"
               - "'verify-x509-name server name' in _lines"
+              - "'auth SHA256' in _lines"
+              - "'key-direction 1' in _lines"
               - lookup('ansible.builtin.file', molecule_pki_dir ~ '/ca.crt') in _profile
               - lookup('ansible.builtin.file', molecule_pki_dir ~ '/issued/' ~ item ~ '.crt') in _profile
               - lookup('ansible.builtin.file', molecule_pki_dir ~ '/private/' ~ item ~ '.key') in _profile

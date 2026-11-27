@@ -51,10 +51,12 @@
       - (openvpn_pki_port | int) >= 1
       - (openvpn_pki_port | int) <= 65535
       - openvpn_pki_proto in ['udp', 'tcp', 'udp6', 'tcp6']
+      - (openvpn_pki_key_direction | string) in ['', 'None', '0', '1']
     fail_msg: >-
-      openvpn_pki: the port must be between 1 and 65535 and the protocol
-      udp/tcp/udp6/tcp6 (got port {{ openvpn_pki_port }}, proto
-      {{ openvpn_pki_proto }}).
+      openvpn_pki: the port must be between 1 and 65535, the protocol
+      udp/tcp/udp6/tcp6 and the key direction 0, 1 or "" (got port
+      {{ openvpn_pki_port }}, proto {{ openvpn_pki_proto }}, key direction
+      '{{ openvpn_pki_key_direction }}').
     quiet: true
 
 - name: Assert that the profiles get a real server address
