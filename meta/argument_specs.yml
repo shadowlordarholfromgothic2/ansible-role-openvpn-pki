@@ -1,0 +1,96 @@
+---
+# The role's variables, for `ansible-doc -t role` and for the argument
+# validation Ansible runs before the role's first task. The defaults here are
+# documentation only - the role takes its values from defaults/main.yml, so keep
+# the two in sync. tasks/validate.yml checks what types and choices cannot.
+argument_specs:
+  main:
+    short_description: Creates the PKI and client profiles for an OpenVPN server
+    description:
+      - Creates a CA, the server's certificate and key, a tls-crypt key, a
+        certificate and key per client, a certificate revocation list and a
+        ready-to-import C(.ovpn) profile per client - as files on the controller.
+      - Runs on the controller only, once per play, whatever the play's hosts.
+      - Safe to re-run. An existing key is never replaced, and only what is
+        missing or changed gets written. Keys and profiles may be
+        Vault-encrypted, the role reads them through the C(file) lookup.
+      - The files are meant for the homelab.openvpn role, which deploys the
+        server.
+    author:
+      - Kirill
+    options:
+      # ---------- the PKI -------------------------------------------------
+      openvpn_pki_dir:
+        type: str
+        default: "{{ playbook_dir }}/pki"
+        description: Directory on the controller the PKI and the profiles are written to.
+      openvpn_pki_ca_name:
+        type: str
+        default: Homelab OpenVPN CA
+        description:
+          - Common name of the CA.
+          - Changing it later makes a new CA certificate, new certificates for
+            everyone and new profiles.
+      openvpn_pki_server_name:
+        type: str
+        default: server
+        description:
+          - Common name and file name of the server's certificate. Letters,
+            digits, C(_), C(.) and C(-).
+          - The profiles only accept a server with this name (C(verify-x509-name)).
+      openvpn_pki_ca_days:
+        type: int
+        default: 3650
+        description:
+          - Validity of the CA certificate and of the CRL, in days.
+          - Applied when the certificate is issued, changing it reissues nothing.
+      openvpn_pki_cert_days:
+        type: int
+        default: 1825
+        description:
+          - Validity of the server and client certificates, in days.
+          - Applied when a certificate is issued, changing it reissues nothing.
+
+      # ---------- the client profiles -------------------------------------
+      openvpn_pki_remote:
+        type: str
+        default: vpn.example.com
+        description:
+          - Public DNS name or IP address of the server, written into the profiles.
+          - The default is a placeholder the role refuses to write profiles with.
+      openvpn_pki_port:
+        type: int
+        default: 1194
+        description: Port of the server. Must match the server's C(openvpn_port).
+      openvpn_pki_proto:
+        type: str
+        choices: [udp, tcp, udp6, tcp6]
+        default: udp
+        description: Protocol of the server. Must match the server's C(openvpn_proto).
+      openvpn_pki_clients:
+        type: list
+        elements: dict
+        default: []
+        description:
+          - One key, certificate and profile per client.
+          - Keep the entry of a revoked client, or its certificate drops off
+            the CRL again.
+        options:
+          name:
+            type: str
+            required: true
+            description:
+              - Common name of the client's certificate and name of its files.
+                Letters, digits, C(_), C(.) and C(-).
+          revoked:
+            type: bool
+            default: false
+            description:
+              - V(true) puts the client's certificate on the CRL and deletes its profile.
+      openvpn_pki_client_template:
+        type: str
+        default: openvpn-client.ovpn.j2
+        description:
+          - Template the profiles are rendered from, looked up in the role's
+            C(templates/) directory first, then in the playbook's. A custom
+            template needs a name of its own.

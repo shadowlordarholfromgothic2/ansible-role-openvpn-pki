@@ -1,0 +1,24 @@
+---
+# find reads the files as they are on disk; the file lookup would decrypt
+# them. Matches every file that does not start with the Vault header.
+- name: Find the secrets in plain text
+  ansible.builtin.find:
+    paths:
+      - "{{ openvpn_pki_dir }}/private"
+      - "{{ openvpn_pki_dir }}/clients"
+    patterns: ["*.key", "*.ovpn"]
+    contains: '\A(?!\$ANSIBLE_VAULT;)'
+    read_whole_file: true
+  register: _openvpn_pki_plaintext
+
+- name: Warn about the secrets in plain text
+  ansible.builtin.debug:
+    msg:
+      - "{{ _openvpn_pki_files | length }} secret file(s) in plain text. Encrypt them before committing, from {{ playbook_dir }}:"
+      - "ansible-vault encrypt {{ _openvpn_pki_files | join(' ') }}"
+  when: _openvpn_pki_files | length > 0
+  vars:
+    # Relative to the playbook directory when they are in it.
+    _openvpn_pki_files: >-
+      {{ _openvpn_pki_plaintext.files | map(attribute='path')
+         | map('regex_replace', '^' ~ (playbook_dir ~ '/') | regex_escape, '') | sort }}

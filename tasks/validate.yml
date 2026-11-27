@@ -1,0 +1,68 @@
+---
+# Checks that need more than the types and choices meta/argument_specs.yml
+# already enforces. Nothing is written before all of them pass.
+
+- name: Assert that the client entries are valid
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined
+      - item.name is string
+      - item.name is match(_openvpn_pki_name_regex)
+      - item.revoked | default(false) is boolean
+    fail_msg: >-
+      openvpn_pki_clients: every entry needs a `name` of letters, digits,
+      '_', '.' and '-' (it becomes a file name and the certificate's CN),
+      and optionally `revoked: true/false` (got {{ item }}).
+    quiet: true
+  loop: "{{ openvpn_pki_clients }}"
+  loop_control:
+    label: "{{ item.name | default(item) }}"
+
+- name: Assert that the names are usable
+  ansible.builtin.assert:
+    that:
+      - openvpn_pki_server_name is match(_openvpn_pki_name_regex)
+      - _openvpn_pki_names | unique | length == _openvpn_pki_names | length
+      - _openvpn_pki_names | intersect(_openvpn_pki_reserved_names) | length == 0
+    fail_msg: >-
+      openvpn_pki: the server and client names must be unique and must not be
+      {{ _openvpn_pki_reserved_names | join(' or ') }} - their keys share
+      private/ (got {{ _openvpn_pki_names }}).
+    quiet: true
+
+- name: Assert that the PKI settings are usable
+  ansible.builtin.assert:
+    that:
+      - openvpn_pki_dir | length > 0
+      - openvpn_pki_ca_name | length > 0
+      - (openvpn_pki_ca_days | int) > 0
+      - (openvpn_pki_cert_days | int) > 0
+    fail_msg: >-
+      openvpn_pki: needs an openvpn_pki_dir, an openvpn_pki_ca_name and
+      validity periods of at least one day (got dir '{{ openvpn_pki_dir }}',
+      CA '{{ openvpn_pki_ca_name }}', {{ openvpn_pki_ca_days }} days for the
+      CA, {{ openvpn_pki_cert_days }} days for the certificates).
+    quiet: true
+
+- name: Assert that the connection settings are usable
+  ansible.builtin.assert:
+    that:
+      - (openvpn_pki_port | int) >= 1
+      - (openvpn_pki_port | int) <= 65535
+      - openvpn_pki_proto in ['udp', 'tcp', 'udp6', 'tcp6']
+    fail_msg: >-
+      openvpn_pki: the port must be between 1 and 65535 and the protocol
+      udp/tcp/udp6/tcp6 (got port {{ openvpn_pki_port }}, proto
+      {{ openvpn_pki_proto }}).
+    quiet: true
+
+- name: Assert that the profiles get a real server address
+  ansible.builtin.assert:
+    that: openvpn_pki_remote not in ['', 'vpn.example.com']
+    fail_msg: >-
+      openvpn_pki_remote is the placeholder '{{ openvpn_pki_remote }}' - set
+      the address the clients connect to, e.g.
+      -e openvpn_pki_remote=vpn.mydomain.tld
+    quiet: true
+  when: _openvpn_pki_active | length > 0

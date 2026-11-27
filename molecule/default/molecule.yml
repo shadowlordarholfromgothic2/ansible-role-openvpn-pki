@@ -1,6 +1,14 @@
 ---
-# Runs the role in a throwaway container and proves it converges, is
-# idempotent and leaves the host in the expected state.
+# The role writes its files on the controller, into Molecule's ephemeral
+# directory (gone after `molecule destroy`). The container only runs an
+# OpenVPN server and its clients, to prove that the PKI and the profiles work.
+#
+#   prepare   the role creates a PKI with two clients, the test encrypts its
+#             secrets with Ansible Vault, as the README tells users to
+#   converge  the role revokes one client and adds another, on top of the
+#             encrypted PKI
+#   verify    the files are right, and a server started from them lets the
+#             active clients in with their profiles and turns the revoked one away
 #
 #   pip install -r requirements-dev.txt
 #   molecule test
@@ -9,8 +17,9 @@ driver:
   name: docker
 
 platforms:
-  # Images with systemd as PID 1, so roles that manage services can be tested.
-  - name: template-role-debian13
+  # Privileged for /dev/net/tun. systemd is not needed: verify.yml starts
+  # OpenVPN itself.
+  - name: openvpn-pki-debian13
     image: geerlingguy/docker-debian13-ansible:latest
     command: /lib/systemd/systemd
     pre_build_image: true
@@ -21,6 +30,9 @@ platforms:
 
 provisioner:
   name: ansible
+  env:
+    # Test-only password for the encrypted PKI.
+    ANSIBLE_VAULT_PASSWORD_FILE: ${MOLECULE_SCENARIO_DIRECTORY}/vault-password
   config_options:
     defaults:
       callbacks_enabled: ansible.posix.profile_tasks
@@ -32,6 +44,7 @@ scenario:
   test_sequence:
     - destroy
     - create
+    - prepare
     - converge
     - idempotence     # the important one
     - verify

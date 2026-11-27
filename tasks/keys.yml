@@ -1,0 +1,43 @@
+---
+- name: Create the PKI directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ openvpn_pki_dir }}", mode: "0755" }
+    - { path: "{{ openvpn_pki_dir }}/issued", mode: "0755" }
+    - { path: "{{ openvpn_pki_dir }}/private", mode: "0700" }
+    - { path: "{{ openvpn_pki_dir }}/clients", mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# Only keys that do not exist yet. The module cannot read a Vault-encrypted
+# key and would replace it - for ca.key that voids every certificate.
+- name: Create the missing private keys
+  community.crypto.openssl_privatekey:
+    path: "{{ openvpn_pki_dir }}/private/{{ item }}.key"
+    type: ECC
+    curve: secp256r1
+    regenerate: never
+    mode: "0600"
+  loop: "{{ ['ca'] + (_openvpn_pki_leaves | map(attribute='name') | list) }}"
+  when: not ((openvpn_pki_dir ~ '/private/' ~ item ~ '.key') is file)
+
+# What `openvpn --genkey secret` writes: 256 random bytes as 16 lines of hex -
+# without needing OpenVPN on the controller. force: false leaves an existing
+# key alone.
+- name: Create the tls-crypt key
+  ansible.builtin.copy:
+    content: |
+      -----BEGIN OpenVPN Static key V1-----
+      {% for line in _openvpn_pki_hex | batch(32) -%}
+      {{ line | join }}
+      {% endfor -%}
+      -----END OpenVPN Static key V1-----
+    dest: "{{ openvpn_pki_dir }}/private/tls-crypt.key"
+    mode: "0600"
+    force: false
+  diff: false
+  vars:
+    _openvpn_pki_hex: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['0123456789abcdef'], length=512) }}"

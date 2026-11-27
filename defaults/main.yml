@@ -1,29 +1,59 @@
 ---
 # ==============================================================================
-# template_role - role interface
+# openvpn_pki - role interface
 # ==============================================================================
 # Everything a user of the role may override lives here, with a comment.
-# Internal constants that must not be overridden go to vars/main.yml.
+# Internal helpers that must not be overridden go to vars/main.yml.
 #
-# Every variable starts with the role name (ansible-lint enforces this).
+# The role runs on the controller only and writes files there: the PKI for the
+# OpenVPN server (deployed by the homelab.openvpn role) and one ready-to-import
+# profile per client. See the README for what has to be encrypted.
 # ==============================================================================
 
-# ---------- state -------------------------------------------------------------
+# ---------- the PKI -----------------------------------------------------------
 
-# present -> the role's config is installed
-# absent  -> the role's config is removed
-template_role_state: present
+# Where the files go, on the controller. In ./pki, next to the playbooks, the
+# homelab.openvpn role's _src paths find them (openvpn_ca_cert_src: pki/ca.crt).
+openvpn_pki_dir: "{{ playbook_dir }}/pki"
 
-# ---------- paths -------------------------------------------------------------
+# Name (CN) of the CA. Changing it later makes a new CA certificate, new
+# certificates for everyone and new profiles.
+openvpn_pki_ca_name: Homelab OpenVPN CA
 
-# Where the role writes its configuration on the managed host.
-template_role_config_dir: /etc/template_role
+# CN and file name of the server's certificate. The profiles only accept a
+# server with this CN (verify-x509-name).
+openvpn_pki_server_name: server
 
-# ---------- configuration -----------------------------------------------------
+# Validity in days, applied when a certificate is issued - changing them does
+# not reissue anything. To renew a certificate, delete it (ca.crt or
+# issued/<name>.crt) and re-run: its key stays, the profiles are rewritten.
+# The CRL is valid as long as the CA (OpenVPN refuses everyone once it expires).
+openvpn_pki_ca_days: 3650
+openvpn_pki_cert_days: 1825
 
-# Key/value pairs rendered into {{ template_role_config_dir }}/config.ini.
+# ---------- the client profiles -----------------------------------------------
+
+# Address the clients connect to: the server's public DNS name or IP. This is a
+# placeholder, the role refuses to write profiles with it.
+openvpn_pki_remote: vpn.example.com
+
+# Must match the server's openvpn_port and openvpn_proto.
+openvpn_pki_port: 1194
+# udp | tcp | udp6 | tcp6
+openvpn_pki_proto: udp
+
+# One key, certificate and profile per client. `revoked: true` puts the
+# client's certificate on the CRL and deletes its profile - keep the entry
+# afterwards, or the certificate drops off the CRL again.
 #
-# template_role_settings:
-#   log_level: info
-#   listen: "127.0.0.1:8080"
-template_role_settings: {}
+#   openvpn_pki_clients:
+#     - name: kirgo-laptop
+#     - name: old-phone
+#       revoked: true
+openvpn_pki_clients: []
+
+# Template the profiles are rendered from. To add directives of your own, copy
+# the role's templates/openvpn-client.ovpn.j2 into the playbook's templates/
+# directory under a NEW name and set it here - under the same name, the role's
+# own file would win. It sees the role's variables, and the client as `item`.
+openvpn_pki_client_template: openvpn-client.ovpn.j2

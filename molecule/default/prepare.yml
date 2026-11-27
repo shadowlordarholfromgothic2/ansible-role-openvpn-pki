@@ -1,0 +1,66 @@
+---
+# The state a user is in after the first run: a PKI with two clients, alice
+# and bob, whose secrets have been encrypted with Ansible Vault as the README
+# says. converge.yml then revokes bob and adds carol on top of it.
+- name: Prepare
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    molecule_ephemeral_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+
+    openvpn_pki_dir: "{{ molecule_ephemeral_dir }}/pki"
+    openvpn_pki_ca_name: Molecule CA
+    openvpn_pki_remote: 127.0.0.1
+    openvpn_pki_clients:
+      - name: alice
+      - name: bob
+
+  tasks:
+    - name: Install OpenVPN for verify.yml
+      ansible.builtin.apt:
+        name: openvpn
+        update_cache: true
+
+    # prepare.yml runs once per `molecule create`. Whatever an aborted run left
+    # behind must not end up in this one.
+    - name: Remove a PKI left over from an earlier run
+      ansible.builtin.file:
+        path: "{{ openvpn_pki_dir }}"
+        state: absent
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+    - name: Create the PKI with two active clients
+      ansible.builtin.import_role:
+        name: homelab.openvpn_pki
+
+    - name: Encrypt the secrets
+      delegate_to: localhost
+      run_once: true
+      become: false
+      block:
+        # The role deletes bob's profile once he is revoked. verify.yml tries
+        # to connect with this copy.
+        - name: Keep a copy of bob's profile
+          ansible.builtin.copy:
+            src: "{{ openvpn_pki_dir }}/clients/bob.ovpn"
+            dest: "{{ molecule_ephemeral_dir }}/bob-revoked.ovpn"
+            mode: "0600"
+
+        - name: Find the secrets
+          ansible.builtin.find:
+            paths:
+              - "{{ openvpn_pki_dir }}/private"
+              - "{{ openvpn_pki_dir }}/clients"
+            patterns: ["*.key", "*.ovpn"]
+          register: molecule_secrets
+
+        # With the password file from ANSIBLE_VAULT_PASSWORD_FILE, which
+        # molecule.yml sets.
+        - name: Encrypt the secrets with Ansible Vault
+          ansible.builtin.command:
+            argv: "{{ ['ansible-vault', 'encrypt'] + (molecule_secrets.files | map(attribute='path') | sort) }}"
+          changed_when: true

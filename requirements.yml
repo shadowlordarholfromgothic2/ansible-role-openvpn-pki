@@ -3,9 +3,14 @@
 # install it automatically. List here what the role itself needs to *run*
 # first, then test-only content, and say which is which.
 collections:
-  # TODO: collections the role uses, e.g.
-  # - name: community.general
-  #   version: ">=9.0.0"
+  # Used by the role: keys, signing requests, certificates and the CRL. The
+  # tests also read the certificates and the CRL back with it.
+  - name: community.crypto
+    version: ">=2.10.0"
+
+  # Used by the role: the dict_kv filter that builds the CRL's revoked list.
+  - name: community.general
+    version: ">=1.3.0"
 
   # Test-only: Molecule's docker driver creates the instances with it and
   # connects to them through it. Keep it even if the role never uses Docker.
@@ -16,8 +21,3 @@ collections:
   # molecule/default/molecule.yml.
   - name: ansible.posix
     version: ">=1.4.0"
-
-# Test-only roles used by molecule/default/converge.yml, e.g.
-# roles:
-#   - name: geerlingguy.docker
-#     version: 8.0.0
